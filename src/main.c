@@ -23,18 +23,20 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 
-void explain_property_failure(Display *display, Atom property)
+static Atom active_window_prop = None;
+
+void explain_property_failure(Display *display, const Atom property)
 {
     char *prop_name = XGetAtomName(display, property);
     fprintf(stderr, "couldn't get property %s\n", prop_name);
     XFree(prop_name);
 }
 
-void get_window_class_name(Display *display, Window win, char **win_class,
-    char **win_name)
+void get_window_class_name(Display *display, const Window window,
+    char **win_class, char **win_name)
 {
     XClassHint class_hint;
-    Status result = XGetClassHint(display, win, &class_hint);
+    Status result = XGetClassHint(display, window, &class_hint);
     if (result != 0) {
         if (class_hint.res_class && win_class)
             *win_class = class_hint.res_class;
@@ -44,7 +46,7 @@ void get_window_class_name(Display *display, Window win, char **win_class,
         fprintf(stderr, "couldn't get property WM_CLASS %d\n", result);
 }
 
-int get_window_pid(Display *display, Window win)
+int get_window_pid(Display *display, const Window window)
 {
     int pid = 0;
     Atom property = XInternAtom(display, "_NET_WM_PID", False);
@@ -53,7 +55,7 @@ int get_window_pid(Display *display, Window win)
     int actual_format;
     unsigned long nitems, bytes_after;
     unsigned char *data = 0;
-    int result = XGetWindowProperty(display, win, property,
+    int result = XGetWindowProperty(display, window, property,
         0, 65536, False, type, &actual_type, &actual_format, &nitems,
         &bytes_after, &data);
     if (result == Success) {
@@ -67,34 +69,61 @@ int get_window_pid(Display *display, Window win)
     return pid;
 }
 
-void get_list_stacking(Display *display, Window root_win)
+void show_window_info(Display *display, const Window window)
 {
-    Atom property = XInternAtom(display, "_NET_CLIENT_LIST_STACKING", False);
+    char *win_name = NULL, *win_class = NULL;
+    get_window_class_name(display, window, &win_class, &win_name);
+    int pid = get_window_pid(display, window);
+    fprintf(stdout, "\"%s\", \"%s\", %d\n", win_class, win_name, pid);
+    if (win_name)
+        XFree(win_name);
+    if (win_class)
+        XFree(win_class);
+}
+
+int get_active_window(Display *display, const Window root_win)
+{
     Atom type = XA_WINDOW;
     Atom actual_type;
     int actual_format;
     unsigned long nitems, bytes_after;
-    Window *list_stacking = 0;
-    int result = XGetWindowProperty(display, root_win, property,
+    unsigned char *data;
+    int result = XGetWindowProperty(display, root_win, active_window_prop,
         0, 65536, False, type, &actual_type, &actual_format, &nitems,
-        &bytes_after, (unsigned char**)(&list_stacking));
+        &bytes_after, &data);
     if (result == Success) {
-        if (list_stacking) {
-            for (unsigned int i = 0; i < nitems; i++) {
-                char *win_name = NULL, *win_class = NULL;
-                get_window_class_name(display, list_stacking[i], &win_class,
-                    &win_name);
-                int pid = get_window_pid(display, list_stacking[i]);
-                fprintf(stdout, "\"%s\", \"%s\", %d\n", win_class, win_name, pid);
-                if (win_name)
-                    XFree(win_name);
-                if (win_class)
-                    XFree(win_class);
+        if (data) {
+            Window window = *(Window*)data;
+            XFree(data);
+            if (window != None) {
+                show_window_info(display, window);
+                return 0; /* Success */
             }
-            XFree(list_stacking);
         }
     } else
-        explain_property_failure(display, property);
+        explain_property_failure(display, active_window_prop);
+
+    return 1;
+}
+
+void handle_event(Display *display)
+{
+    if (XPending(display) > 0) {
+        XEvent event;
+
+        /* Get current event of X display */
+        int result = XNextEvent(display, &event);
+        if (result == Success && event.type == PropertyNotify) {
+            if (event.xproperty.atom == active_window_prop) {
+                result = get_active_window(event.xproperty.display,
+                    event.xproperty.window);
+                if (result == 0)
+                    fprintf(stdout, "Event time %lu:\n", event.xproperty.time);
+            }
+        } else {
+            fprintf(stderr, "Couldn't fetch event, error code %d\n", result);
+        }
+    }
 }
 
 int main(int argc, char **argv)
@@ -108,19 +137,28 @@ int main(int argc, char **argv)
     /* Connect to X server */
     display = XOpenDisplay(display_name);
     if (display == NULL) {
-        fprintf(stderr, "couldn't connect to X server %s\n", display_name);
+        fprintf(stderr, "Couldn't connect to X server %s\n", display_name);
         exit(EXIT_FAILURE);
     }
 
+    active_window_prop = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+
+    /* Get root windows for every screen */
     int screen_count = XScreenCount(display);
     Window *root_wins = calloc(screen_count, sizeof(Window*));
     for (int i = 0; i < screen_count; i++) {
         root_wins[i] = XRootWindow(display, i);
 
-        get_list_stacking(display, root_wins[i]);
-    }
+        get_active_window(display, root_wins[i]);
 
+        int result = XSelectInput(display, root_wins[i], PropertyChangeMask);
+        if (result == 0)
+            fprintf(stderr, "Failed to attach handler to window #%i\n", i);
+    }
     free(root_wins);
+
+    while (True)
+        handle_event(display);
 
     /* Disconnect from X server */
     XCloseDisplay(display);
