@@ -24,6 +24,8 @@
 #include <X11/Xutil.h>
 
 static Atom active_window_prop = None;
+static Window active_window = None;
+static Time activation_time = CurrentTime;
 
 void explain_property_failure(Display *display, const Atom property)
 {
@@ -44,6 +46,29 @@ void get_window_class_name(Display *display, const Window window,
             *win_name = class_hint.res_name;
     } else
         fprintf(stderr, "couldn't get property WM_CLASS %d\n", result);
+}
+
+Time get_time(Display *display, const Window window)
+{
+    Time time = CurrentTime;
+    Atom property = XInternAtom(display, "_NET_WM_USER_TIME", False);
+    Atom type = XA_CARDINAL;
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = 0;
+    int result = XGetWindowProperty(display, window, property,
+        0, 65536, False, type, &actual_type, &actual_format, &nitems,
+        &bytes_after, &data);
+    if (result == Success) {
+        if (data) {
+            time = *(Time*)data;
+            XFree(data);
+        }
+    } else
+        explain_property_failure(display, property);
+
+    return time;
 }
 
 int get_window_pid(Display *display, const Window window)
@@ -81,7 +106,7 @@ void show_window_info(Display *display, const Window window)
         XFree(win_class);
 }
 
-int get_active_window(Display *display, const Window root_win)
+Window get_active_window(Display *display, const Window root_win)
 {
     Atom type = XA_WINDOW;
     Atom actual_type;
@@ -96,14 +121,13 @@ int get_active_window(Display *display, const Window root_win)
             Window window = *(Window*)data;
             XFree(data);
             if (window != None) {
-                show_window_info(display, window);
-                return 0; /* Success */
+                return window;
             }
         }
     } else
         explain_property_failure(display, active_window_prop);
 
-    return 1;
+    return None;
 }
 
 void handle_event(Display *display)
@@ -115,10 +139,15 @@ void handle_event(Display *display)
         int result = XNextEvent(display, &event);
         if (result == Success && event.type == PropertyNotify) {
             if (event.xproperty.atom == active_window_prop) {
-                result = get_active_window(event.xproperty.display,
+                Window win = get_active_window(event.xproperty.display,
                     event.xproperty.window);
-                if (result == 0)
-                    fprintf(stdout, "Event time %lu:\n", event.xproperty.time);
+                if (win != None && win != active_window) {
+                    show_window_info(display, win);
+                    fprintf(stderr, "Duration %li\n",
+                        event.xproperty.time - activation_time);
+                    active_window = win;
+                    activation_time = event.xproperty.time;
+                }
             }
         } else {
             fprintf(stderr, "Couldn't fetch event, error code %d\n", result);
@@ -149,7 +178,8 @@ int main(int argc, char **argv)
     for (int i = 0; i < screen_count; i++) {
         root_wins[i] = XRootWindow(display, i);
 
-        get_active_window(display, root_wins[i]);
+        active_window = get_active_window(display, root_wins[i]);
+        activation_time = get_time(display, active_window);
 
         int result = XSelectInput(display, root_wins[i], PropertyChangeMask);
         if (result == 0)
