@@ -123,34 +123,32 @@ Window get_active_window(Display *display, const Window root_win)
 
 void handle_event(Display *display)
 {
-    if (XPending(display) > 0) {
-        XEvent event;
+    XEvent event;
 
-        /* Get current event of X display */
-        int result = XNextEvent(display, &event);
-        if (result == Success && event.type == PropertyNotify) {
-            if (event.xproperty.atom == active_window_prop) {
-                Window win = get_active_window(event.xproperty.display,
-                    event.xproperty.window);
-                if (win != None && win != active_window) {
-                    if (active_window_name)
-                        XFree(active_window_name);
-                    if (active_window_class)
-                        XFree(active_window_class);
-                    get_window_class_name(display, win, &active_window_class,
-                        &active_window_name);
-                    active_window_pid = get_window_pid(display, win);
-                    fprintf(stdout, "%d - \"%s\", \"%s\" - %li ms\n",
-                        active_window_pid, active_window_class,
-                        active_window_name,
-                        event.xproperty.time - activation_time);
-                    active_window = win;
-                    activation_time = event.xproperty.time;
-                }
+    /* Get current event of X display */
+    int result = XNextEvent(display, &event);
+    if (result == Success && event.type == PropertyNotify) {
+        if (event.xproperty.atom == active_window_prop) {
+            Window win = get_active_window(event.xproperty.display,
+                event.xproperty.window);
+            if (win != None && win != active_window) {
+                if (active_window_name)
+                    XFree(active_window_name);
+                if (active_window_class)
+                    XFree(active_window_class);
+                get_window_class_name(display, win, &active_window_class,
+                    &active_window_name);
+                active_window_pid = get_window_pid(display, win);
+                fprintf(stdout, "%d - \"%s\", \"%s\" - %li ms\n",
+                    active_window_pid, active_window_class,
+                    active_window_name,
+                    event.xproperty.time - activation_time);
+                active_window = win;
+                activation_time = event.xproperty.time;
             }
-        } else {
-            fprintf(stderr, "Couldn't fetch event, error code %d\n", result);
         }
+    } else {
+        fprintf(stderr, "Couldn't fetch event, error code %d\n", result);
     }
 }
 
