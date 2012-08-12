@@ -26,6 +26,9 @@
 static Atom active_window_prop = None;
 static Window active_window = None;
 static Time activation_time = CurrentTime;
+static char *active_window_name = 0;
+static char *active_window_class = 0;
+static int active_window_pid = 0;
 
 void explain_property_failure(Display *display, const Atom property)
 {
@@ -94,18 +97,6 @@ int get_window_pid(Display *display, const Window window)
     return pid;
 }
 
-void show_window_info(Display *display, const Window window)
-{
-    char *win_name = NULL, *win_class = NULL;
-    get_window_class_name(display, window, &win_class, &win_name);
-    int pid = get_window_pid(display, window);
-    fprintf(stdout, "\"%s\", \"%s\", %d\n", win_class, win_name, pid);
-    if (win_name)
-        XFree(win_name);
-    if (win_class)
-        XFree(win_class);
-}
-
 Window get_active_window(Display *display, const Window root_win)
 {
     Atom type = XA_WINDOW;
@@ -142,8 +133,16 @@ void handle_event(Display *display)
                 Window win = get_active_window(event.xproperty.display,
                     event.xproperty.window);
                 if (win != None && win != active_window) {
-                    show_window_info(display, win);
-                    fprintf(stderr, "Duration %li\n",
+                    if (active_window_name)
+                        XFree(active_window_name);
+                    if (active_window_class)
+                        XFree(active_window_class);
+                    get_window_class_name(display, win, &active_window_class,
+                        &active_window_name);
+                    active_window_pid = get_window_pid(display, win);
+                    fprintf(stdout, "%d - \"%s\", \"%s\" - %li ms\n",
+                        active_window_pid, active_window_class,
+                        active_window_name,
                         event.xproperty.time - activation_time);
                     active_window = win;
                     activation_time = event.xproperty.time;
@@ -189,6 +188,12 @@ int main(int argc, char **argv)
 
     while (True)
         handle_event(display);
+
+    /* Clear resources */
+    if (active_window_name)
+        XFree(active_window_name);
+    if (active_window_class)
+        XFree(active_window_class);
 
     /* Disconnect from X server */
     XCloseDisplay(display);
